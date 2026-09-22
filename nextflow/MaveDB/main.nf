@@ -57,7 +57,6 @@ include { filter_by_licence } from './subworkflows/filter.nf'
 include { download_MaveDB_data } from './nf_modules/fetch.nf'
 include { split_by_mapping_type } from './subworkflows/split.nf'
 include { run_variant_recoder } from './nf_modules/variant_recoder.nf'
-include { get_hgvsp } from './nf_modules/utils.nf'
 include { map_scores_to_HGVSp_variants; map_scores_to_HGVSg_variants } from './nf_modules/mapping.nf'
 include { download_chain_files; liftover_to_hg38 } from './nf_modules/liftover.nf'
 include { concatenate_files; tabix } from './nf_modules/output.nf'
@@ -67,43 +66,12 @@ include { extract_metadata } from './nf_modules/extract_metadata.nf'
 include { collate_logs } from './nf_modules/collate_logs.nf'
 include { datacheck_urns } from './nf_modules/datacheck.nf'
 
-def load_vr_memory_hints(path) {
-  if (!path) {
-    return [:]
-  }
-
-  def hints = [:]
-  file(path, checkIfExists: true).eachLine { line, lineNumber ->
-    def value = line.trim()
-    if (!value || value.startsWith('#') || value.startsWith('urn\t')) {
-      return
-    }
-
-    def fields = value.split('\t', -1)
-    if (fields.size() != 3) {
-      throw new IllegalArgumentException("Invalid Variant Recoder memory hint at ${path}:${lineNumber}")
-    }
-
-    def hintLines = fields[1] as long
-    def peakRssGb = fields[2] as double
-    if (hintLines <= 0 || peakRssGb <= 0) {
-      throw new IllegalArgumentException("Non-positive Variant Recoder memory hint at ${path}:${lineNumber}")
-    }
-
-    hints[fields[0]] = [lines: hintLines, peakRssGb: peakRssGb]
-  }
-  log.info "Loaded ${hints.size()} Variant Recoder memory hints from ${path}"
-  return hints
-}
-
 // Main workflow
 print_params('Create MaveDB plugin data for VEP', nullable=['registry'])
 check_JVM_mem(min=50.4)
 print_summary()
 
 workflow {
-  vrMemoryHints = load_vr_memory_hints(params.vr_memory_hints)
-
   urn = Channel
       .fromPath(params.urn, checkIfExists: true)
       .splitText()
@@ -158,21 +126,8 @@ workflow {
   liftover_to_hg38(map_scores_to_HGVSg_variants.out, download_chain_files.out)
 
   // prepare HGVSp mappings
-  get_hgvsp(files.hgvs_pro)
-  hgvsp = get_hgvsp.out
+  hgvsp = files.hgvs_pro
       .filter { it.last().size() > 0 }
-      .map { urn, mappings, scores, metadata, hgvs ->
-        def hint = vrMemoryHints[urn]
-        tuple(
-          urn,
-          mappings,
-          scores,
-          metadata,
-          hgvs,
-          hint?.lines ?: 0L,
-          hint?.peakRssGb ?: 0.0
-        )
-      }
   run_variant_recoder(hgvsp)
   map_scores_to_HGVSp_variants(run_variant_recoder.out)
 

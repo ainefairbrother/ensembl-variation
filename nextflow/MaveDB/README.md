@@ -106,7 +106,7 @@ Notes:
   scripts/build_vr_memory_hints.sh /path/to/completed/run
   ```
 
-  This writes `/path/to/completed/run/vr_memory_hints.tsv` by default. An alternative output path can be supplied as the second argument.
+  By default this reads `RUN_DIR/reports/trace.txt` and `RUN_DIR/work/`, and writes `RUN_DIR/vr_memory_hints.tsv`. An alternative output path can be supplied as the second argument; use `--trace` or `--work-dir` for existing runs with a different layout.
 
 ## Pipeline diagram
 

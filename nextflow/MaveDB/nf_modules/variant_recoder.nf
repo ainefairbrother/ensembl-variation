@@ -1,15 +1,49 @@
+def load_vr_memory_hints(path) {
+  if (!path) {
+    return [:]
+  }
+
+  def hints = [:]
+  file(path, checkIfExists: true).eachLine { line, lineNumber ->
+    def value = line.trim()
+    if (!value || value.startsWith('#') || value.startsWith('urn\t')) {
+      return
+    }
+
+    def fields = value.split('\t', -1)
+    if (fields.size() != 3) {
+      throw new IllegalArgumentException("Invalid Variant Recoder memory hint at ${path}:${lineNumber}")
+    }
+
+    def hintLines = fields[1] as long
+    def peakRssGb = fields[2] as double
+    if (hintLines <= 0 || peakRssGb <= 0) {
+      throw new IllegalArgumentException("Non-positive Variant Recoder memory hint at ${path}:${lineNumber}")
+    }
+
+    hints[fields[0]] = [lines: hintLines, peakRssGb: peakRssGb]
+  }
+  log.info "Loaded ${hints.size()} Variant Recoder memory hints from ${path}"
+  return hints
+}
+
+def vrMemoryHints = load_vr_memory_hints(params.vr_memory_hints)
+
 process run_variant_recoder {
   // Run Variant Recoder on a file with HGVS identifiers
   label 'bigmem'
 
   input:
-    tuple val(urn), path(mappings), path(scores), path(metadata), path(hgvs), val(hint_lines), val(hint_peak_rss_gb)
+    tuple val(urn), path(mappings), path(scores), path(metadata), path(hgvs)
   output:
     tuple val(urn), path(mappings), path(scores), path(metadata), path('vr.json')
 
   tag "${urn}"
   memory { 
     def n = file(hgvs.target).countLines()
+    def hint = vrMemoryHints[urn]
+    def hintLines = hint?.lines ?: 0L
+    def hintPeakRssGb = hint?.peakRssGb ?: 0.0
 
     def fallback =
       n <= 100   ? 2.GB   :
@@ -22,8 +56,8 @@ process run_variant_recoder {
                    300.GB
 
     def base = fallback
-    if (hint_lines > 0 && hint_peak_rss_gb > 0) {
-      def scaledPeakGb = hint_peak_rss_gb * n / hint_lines
+    if (hintLines > 0 && hintPeakRssGb > 0) {
+      def scaledPeakGb = hintPeakRssGb * n / hintLines
       def hintedGb = (long) Math.ceil((scaledPeakGb * 1.3 + 4) / 4) * 4
       base = [[hintedGb.GB, 8.GB].max(), 300.GB].min()
     }
@@ -47,7 +81,6 @@ process run_variant_recoder {
   script:
   def bin = "${params.ensembl}/ensembl-vep"
   def reg = params.registry ? "--registry ${params.registry}" : ""
-  def memorySource = hint_lines > 0 ? "historical" : "fallback"
   """
   #!/usr/bin/env bash
   set +e
@@ -56,7 +89,7 @@ process run_variant_recoder {
   log() { local ts; ts=\$(date -Is); >&2 echo "[\$ts][MaveDB][URN=\${MAVEDB_URN:-na}][STEP=\${STEP:-na}][REASON=\$1][SUBID=\${2:-na}] \${3:-}"; }
 
   HGVS_LINES=\$(wc -l < "${hgvs}" 2>/dev/null || echo 0)
-  log "vr_start" "na" "attempt=${task.attempt} requested_mem=${task.memory} hgvs_lines=\${HGVS_LINES} memory_source=${memorySource} hint_lines=${hint_lines} hint_peak_rss_gb=${hint_peak_rss_gb}"
+  log "vr_start" "na" "attempt=${task.attempt} hgvs_lines=\${HGVS_LINES}"
 
   perl ${bin}/variant_recoder -i ${hgvs} --vcf_string ${reg} > vr.json 2> vr.stderr
   rc=\$?

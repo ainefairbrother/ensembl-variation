@@ -37,31 +37,41 @@ def find_work_directory(work_dir, task_hash):
 
 def parse_completed_tasks(trace_path):
     with trace_path.open() as trace_handle:
-        next(trace_handle)
-        for line_number, line in enumerate(trace_handle, start=2):
-            fields = [field.strip() for field in line.rstrip("\n").split("\t")]
-            try:
-                process_index = fields.index("run_variant_recoder")
-            except ValueError:
+        reader = csv.DictReader(trace_handle, delimiter="\t")
+        required = {"hash", "process", "status", "peak_rss"}
+        missing = required.difference(reader.fieldnames or [])
+        if missing:
+            raise ValueError(
+                "trace file is missing required columns: {}".format(
+                    ", ".join(sorted(missing))
+                )
+            )
+
+        for line_number, row in enumerate(reader, start=2):
+            process = (row.get("process") or "").strip().split(":")[-1]
+            if process != "run_variant_recoder":
+                continue
+            status = (row.get("status") or "").strip()
+            if status not in {"CACHED", "COMPLETED"}:
                 continue
 
-            # Locate fields relative to the process name so a recoverable joined
-            # trace record does not discard a completed Variant Recoder task.
-            if len(fields) <= process_index + 10:
+            try:
+                task_hash = row["hash"].strip()
+                if not task_hash:
+                    raise ValueError("missing task hash")
+                peak_rss_gb = memory_to_gb(row["peak_rss"])
+            except (AttributeError, ValueError) as error:
                 print(
-                    "Skipping incomplete Variant Recoder trace row {}".format(
-                        line_number
+                    "Skipping Variant Recoder trace row {}: {}".format(
+                        line_number, error
                     ),
                     file=sys.stderr,
                 )
                 continue
 
-            if fields[process_index + 1] != "COMPLETED":
-                continue
-
             yield {
-                "hash": fields[process_index - 2],
-                "peak_rss_gb": memory_to_gb(fields[process_index + 6]),
+                "hash": task_hash,
+                "peak_rss_gb": peak_rss_gb,
             }
 
 

@@ -50,19 +50,21 @@ def collect_values(records, syntax=None):
     return sorted(set(values))
 
 
-def command_type(args):
-    records = load_records(args.mappings)
+def get_mapping_type(records):
     syntaxes = {
         expression.get("syntax")
         for post_mapped in iter_current_postmapped(records)
         for expression in iter_expressions(post_mapped)
         if expression.get("syntax") in HGVS_PRIORITY
     }
+    return next((syntax for syntax in HGVS_PRIORITY if syntax in syntaxes), None)
 
-    for syntax in HGVS_PRIORITY:
-        if syntax in syntaxes:
-            print(syntax)
-            return 0
+
+def command_type(args):
+    syntax = get_mapping_type(load_records(args.mappings))
+    if syntax:
+        print(syntax)
+        return 0
 
     print("No current postMapped HGVS expression found", file=sys.stderr)
     return 2
@@ -72,6 +74,15 @@ def command_extract(args):
     records = load_records(args.mappings)
     for value in collect_values(records, args.syntax):
         print(value)
+    return 0
+
+
+def command_inspect(args):
+    records = load_records(args.mappings)
+    with open(args.hgvsp_output, "w") as output_handle:
+        for value in collect_values(records, "hgvs.p"):
+            print(value, file=output_handle)
+    print(get_mapping_type(records) or "unmapped")
     return 0
 
 
@@ -87,6 +98,11 @@ def main():
     extract_parser.add_argument("--syntax", required=True, choices=HGVS_PRIORITY)
     extract_parser.add_argument("mappings")
     extract_parser.set_defaults(func=command_extract)
+
+    inspect_parser = subparsers.add_parser("inspect", help="print mapping type and write deduplicated HGVSp")
+    inspect_parser.add_argument("--hgvsp-output", required=True)
+    inspect_parser.add_argument("mappings")
+    inspect_parser.set_defaults(func=command_inspect)
 
     args = parser.parse_args()
     try:
